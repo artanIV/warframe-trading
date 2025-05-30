@@ -1,0 +1,88 @@
+# Warframe Market Analyzer - Version simplifiée avec graphiques et filtres
+
+import requests
+import pandas as pd
+import matplotlib.pyplot as plt
+import tkinter as tk
+from tkinter import ttk
+from datetime import datetime
+
+# === Configuration de base ===
+API_URL = "https://api.warframe.market/v1"
+HEADERS = {"accept": "application/json"}
+
+# === Récupération des items disponibles ===
+def get_items():
+    response = requests.get(f"{API_URL}/items", headers=HEADERS)
+    items = response.json()['payload']['items']
+    # On filtre pour ne garder que ceux listés sur le market
+    filtered = [i for i in items if i['url_name'] and not i['url_name'].startswith("riven")]
+    return filtered
+
+# === Récupération des ordres pour un item ===
+def get_orders(item_url):
+    response = requests.get(f"{API_URL}/items/{item_url}/orders", headers=HEADERS)
+    orders = response.json()['payload']['orders']
+    df = pd.DataFrame(orders)
+    df = df[df['user'].apply(lambda x: x['status']) == 'ingame']  # uniquement joueurs connectés
+    return df
+
+# === Analyse simple achat / vente ===
+def analyze_item(df):
+    buys = df[df['order_type'] == 'buy']['platinum']
+    sells = df[df['order_type'] == 'sell']['platinum']
+    return buys.mean() if not buys.empty else 0, sells.mean() if not sells.empty else 0
+
+# === Interface graphique simple avec Tkinter ===
+def start_ui():
+    items = get_items()
+    
+    root = tk.Tk()
+    root.title("Warframe Market Analyzer")
+    root.geometry("800x600")
+
+    filter_var = tk.StringVar()
+    filter_var.set("melee")
+
+    def apply_filter():
+        query = filter_var.get().lower()
+        filtered = [i for i in items if query in i['item_name'].lower() or query in i['url_name']]
+        item_list.delete(0, tk.END)
+        for i in filtered:
+            item_list.insert(tk.END, i['item_name'])
+
+    def show_graph():
+        selected = item_list.curselection()
+        if not selected:
+            return
+        name = item_list.get(selected[0])
+        item_data = next(i for i in items if i['item_name'] == name)
+        df = get_orders(item_data['url_name'])
+        buy, sell = analyze_item(df)
+
+        plt.figure(figsize=(6,4))
+        plt.hist([df[df['order_type']=='buy']['platinum'], df[df['order_type']=='sell']['platinum']], 
+                 bins=15, label=['Buy Orders', 'Sell Orders'], color=['green', 'red'], alpha=0.7)
+        plt.axvline(buy, color='green', linestyle='--', label=f'Mean Buy: {buy:.1f}')
+        plt.axvline(sell, color='red', linestyle='--', label=f'Mean Sell: {sell:.1f}')
+        plt.title(f"Prix de {name}")
+        plt.xlabel("Platinum")
+        plt.ylabel("Ordres")
+        plt.legend()
+        plt.tight_layout()
+        plt.show()
+
+    tk.Label(root, text="Filtrer par type ou mot-clé (ex: melee, arcane, prime, set)").pack()
+    tk.Entry(root, textvariable=filter_var).pack()
+    tk.Button(root, text="Appliquer le filtre", command=apply_filter).pack()
+
+    item_list = tk.Listbox(root, width=60, height=20)
+    item_list.pack(pady=10)
+
+    tk.Button(root, text="Afficher graphique prix", command=show_graph).pack(pady=10)
+
+    apply_filter()
+    root.mainloop()
+
+if __name__ == '__main__':
+    start_ui()
