@@ -1,88 +1,66 @@
-# Warframe Market Analyzer - Version simplifiée avec graphiques et filtres
+# Streamlit App: Warframe Market Analyzer
 
-import requests
+import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
-import tkinter as tk
-from tkinter import ttk
-from datetime import datetime
+import requests
+import plotly.express as px
 
-# === Configuration de base ===
 API_URL = "https://api.warframe.market/v1"
 HEADERS = {"accept": "application/json"}
 
-# === Récupération des items disponibles ===
+@st.cache_data(ttl=3600)
 def get_items():
     response = requests.get(f"{API_URL}/items", headers=HEADERS)
     items = response.json()['payload']['items']
-    # On filtre pour ne garder que ceux listés sur le market
     filtered = [i for i in items if i['url_name'] and not i['url_name'].startswith("riven")]
-    return filtered
+    return pd.DataFrame(filtered)
 
-# === Récupération des ordres pour un item ===
+@st.cache_data(ttl=300)
 def get_orders(item_url):
     response = requests.get(f"{API_URL}/items/{item_url}/orders", headers=HEADERS)
     orders = response.json()['payload']['orders']
     df = pd.DataFrame(orders)
-    df = df[df['user'].apply(lambda x: x['status']) == 'ingame']  # uniquement joueurs connectés
+    df = df[df['user'].apply(lambda x: x['status']) == 'ingame']
     return df
 
-# === Analyse simple achat / vente ===
 def analyze_item(df):
     buys = df[df['order_type'] == 'buy']['platinum']
     sells = df[df['order_type'] == 'sell']['platinum']
     return buys.mean() if not buys.empty else 0, sells.mean() if not sells.empty else 0
 
-# === Interface graphique simple avec Tkinter ===
-def start_ui():
-    items = get_items()
+def main():
+    st.set_page_config(page_title="Warframe Market Analyzer", layout="wide")
+    st.title("📈 Warframe Market Analyzer")
+
+    items_df = get_items()
     
-    root = tk.Tk()
-    root.title("Warframe Market Analyzer")
-    root.geometry("800x600")
+    filter_text = st.text_input("🔍 Filtrer par type, mot-clé (melee, arcane, set, prime...)", "melee")
+    filtered_items = items_df[items_df['item_name'].str.contains(filter_text, case=False)]
 
-    filter_var = tk.StringVar()
-    filter_var.set("melee")
+    item_name = st.selectbox("🧩 Choisir un objet :", filtered_items['item_name'].values)
+    item_data = filtered_items[filtered_items['item_name'] == item_name].iloc[0]
 
-    def apply_filter():
-        query = filter_var.get().lower()
-        filtered = [i for i in items if query in i['item_name'].lower() or query in i['url_name']]
-        item_list.delete(0, tk.END)
-        for i in filtered:
-            item_list.insert(tk.END, i['item_name'])
+    orders_df = get_orders(item_data['url_name'])
+    buy_avg, sell_avg = analyze_item(orders_df)
 
-    def show_graph():
-        selected = item_list.curselection()
-        if not selected:
-            return
-        name = item_list.get(selected[0])
-        item_data = next(i for i in items if i['item_name'] == name)
-        df = get_orders(item_data['url_name'])
-        buy, sell = analyze_item(df)
+    st.markdown(f"### 💰 Prix moyen")
+    col1, col2 = st.columns(2)
+    col1.metric("Achat moyen (Buy)", f"{buy_avg:.1f}₽")
+    col2.metric("Vente moyenne (Sell)", f"{sell_avg:.1f}₽")
 
-        plt.figure(figsize=(6,4))
-        plt.hist([df[df['order_type']=='buy']['platinum'], df[df['order_type']=='sell']['platinum']], 
-                 bins=15, label=['Buy Orders', 'Sell Orders'], color=['green', 'red'], alpha=0.7)
-        plt.axvline(buy, color='green', linestyle='--', label=f'Mean Buy: {buy:.1f}')
-        plt.axvline(sell, color='red', linestyle='--', label=f'Mean Sell: {sell:.1f}')
-        plt.title(f"Prix de {name}")
-        plt.xlabel("Platinum")
-        plt.ylabel("Ordres")
-        plt.legend()
-        plt.tight_layout()
-        plt.show()
+    st.markdown("### 📊 Histogramme des prix")
+    fig = px.histogram(orders_df, x="platinum", color="order_type",
+                       nbins=20, barmode="overlay",
+                       labels={"platinum": "Prix (Platinum)"},
+                       title=f"Distribution des prix pour {item_name}")
+    st.plotly_chart(fig, use_container_width=True)
 
-    tk.Label(root, text="Filtrer par type ou mot-clé (ex: melee, arcane, prime, set)").pack()
-    tk.Entry(root, textvariable=filter_var).pack()
-    tk.Button(root, text="Appliquer le filtre", command=apply_filter).pack()
+    st.markdown("### 📦 Volume du marché")
+    col3, col4 = st.columns(2)
+    col3.write(f"Ordres d'achat actifs : {len(orders_df[orders_df['order_type'] == 'buy'])}")
+    col4.write(f"Ordres de vente actifs : {len(orders_df[orders_df['order_type'] == 'sell'])}")
 
-    item_list = tk.Listbox(root, width=60, height=20)
-    item_list.pack(pady=10)
-
-    tk.Button(root, text="Afficher graphique prix", command=show_graph).pack(pady=10)
-
-    apply_filter()
-    root.mainloop()
+    st.info("ℹ️ Conseil : Vendre si le prix de vente est nettement supérieur au prix d'achat moyen.")
 
 if __name__ == '__main__':
-    start_ui()
+    main()
